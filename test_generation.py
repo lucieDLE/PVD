@@ -14,9 +14,19 @@ from utils.visualize import *
 from model.pvcnn_generation import PVCNN2Base
 
 from tqdm import tqdm
+# from vtkmodules.vtkCommonComputationalGeometry import vtkTriangleFilter
+# from vtkmodules.vtkCommonComputationalGeometry import vtkTriangleFilter
+from vtkmodules.vtkFiltersCore import vtkDelaunay3D
+
 
 from datasets.shapenet_data_pc import ShapeNet15kPointClouds
-
+from datasets.DJD_dataset import DJD_Condyle
+from sklearn.utils import class_weight
+import pyvista as pv
+import open3d as o3d
+import pandas as pd
+import vtk
+from vtk.util import numpy_support
 '''
 models
 '''
@@ -51,8 +61,10 @@ def discretized_gaussian_log_likelihood(x, *, means, log_scales):
 
 
 class GaussianDiffusion:
-    def __init__(self,betas, loss_type, model_mean_type, model_var_type):
+    def __init__(self,betas, loss_type, model_mean_type, model_var_type, weights):
         self.loss_type = loss_type
+        self.weights = weights
+
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
         assert isinstance(betas, np.ndarray)
@@ -245,7 +257,6 @@ class GaussianDiffusion:
 
         return img_t
 
-
 class PVCNN2(PVCNN2Base):
     sa_blocks = [
         ((32, 2, 32), (1024, 0.1, 32, (32, 64))),
@@ -268,12 +279,12 @@ class PVCNN2(PVCNN2Base):
             width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier
         )
 
-
-
 class Model(nn.Module):
-    def __init__(self, args, betas, loss_type: str, model_mean_type: str, model_var_type:str):
+    def __init__(self, args, betas, loss_type: str, model_mean_type: str, model_var_type:str, weights):
         super(Model, self).__init__()
-        self.diffusion = GaussianDiffusion(betas, loss_type, model_mean_type, model_var_type)
+        self.weights = weights
+
+        self.diffusion = GaussianDiffusion(betas, loss_type, model_mean_type, model_var_type, weights)
 
         self.model = PVCNN2(num_classes=args.nc, embed_dim=args.embed_dim, use_att=args.attention,
                             dropout=args.dropout, extra_feature_channels=0)
@@ -378,7 +389,7 @@ def get_constrain_function(ground_truth, mask, eps, num_steps=1):
 
 #############################################################################
 
-def get_dataset(dataroot, npoints,category,use_mask=False):
+def get_dataset_ShapeNet(dataroot, npoints,category,use_mask=False):
     tr_dataset = ShapeNet15kPointClouds(root_dir=dataroot,
         categories=[category], split='train',
         tr_sample_size=npoints,
@@ -400,18 +411,35 @@ def get_dataset(dataroot, npoints,category,use_mask=False):
     )
     return tr_dataset, te_dataset
 
+def get_dataset(train_csv, test_csv, npoints,category):
 
+
+    tr_dataset = DJD_Condyle(data_file=train_csv,
+                             n_points=npoints,
+                             split='train',
+                             category=category
+                             )
+
+    te_dataset = DJD_Condyle(data_file=test_csv,
+                             n_points=npoints,
+                             category=category,
+                             split='test',
+                             points_mean=tr_dataset.points_mean,
+                             points_std=tr_dataset.points_std,
+                             )
+
+    return tr_dataset, te_dataset
 
 def evaluate_gen(opt, ref_pcs, logger):
 
     if ref_pcs is None:
-        _, test_dataset = get_dataset(opt.dataroot, opt.npoints, opt.category, use_mask=False)
+        _, test_dataset = get_dataset(opt.train_csv, opt.test_csv, opt.npoints, opt.category, use_mask=False)
         test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size,
                                                       shuffle=False, num_workers=int(opt.workers), drop_last=False)
         ref = []
         for data in tqdm(test_dataloader, total=len(test_dataloader), desc='Generating Samples'):
-            x = data['test_points']
-            m, s = data['mean'].float(), data['std'].float()
+            x = data['points']
+            m, s = data['mean'][0], data['std']
 
             ref.append(x*s + m)
 
@@ -424,7 +452,10 @@ def evaluate_gen(opt, ref_pcs, logger):
     logger.info("Generation sample size:%s reference size: %s"
           % (sample_pcs.size(), ref_pcs.size()))
 
-
+    pdb.set_trace()
+    print(sample_pcs.type, ref_pcs.type)
+    sample_pcs = sample_pcs.type(dtype=torch.FloatTensor)
+    ref_pcs = ref_pcs.type(dtype=torch.FloatTensor)
     # Compute metrics
     results = compute_all_metrics(sample_pcs, ref_pcs, opt.batch_size)
     results = {k: (v.cpu().detach().item()
@@ -437,49 +468,97 @@ def evaluate_gen(opt, ref_pcs, logger):
     pprint('JSD: {}'.format(jsd))
     logger.info('JSD: {}'.format(jsd))
 
-
+import pdb
 
 def generate(model, opt):
 
-    _, test_dataset = get_dataset(opt.dataroot, opt.npoints, opt.category)
+    df = pd.read_csv(opt.test_csv)
+
+    _, test_dataset = get_dataset(opt.train_csv, opt.test_csv, opt.npoints, opt.category)
+
+    # num_classes = test_dataset.unique_class_weights
+    unique_classes = np.sort(np.unique(df['class']))
+    unique_colors = np.random.randint(0,255,(unique_classes.shape[0], 3))
+    res = dict(map(lambda i,j : (i,j) , unique_classes,unique_colors))
+
+
 
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size,
                                                   shuffle=False, num_workers=int(opt.workers), drop_last=False)
-
+    
     with torch.no_grad():
 
         samples = []
         ref = []
+        idx=0
 
+        # pdb.set_trace()
         for i, data in tqdm(enumerate(test_dataloader), total=len(test_dataloader), desc='Generating Samples'):
+            idx+=1
+            x = data['points'].transpose(1,2)
 
-            x = data['test_points'].transpose(1,2)
-            m, s = data['mean'].float(), data['std'].float()
+            classes = data['class'].numpy()
 
-            gen = model.gen_samples(x.shape,
-                                       'cuda', clip_denoised=False).detach().cpu()
+            m, s = data['mean'][0], data['std']
 
-            gen = gen.transpose(1,2).contiguous()
+            # gen = model.gen_samples(x.shape, 'cuda', clip_denoised=False).detach().cpu()
+
+            # gen = gen.transpose(1,2).contiguous()
             x = x.transpose(1,2).contiguous()
 
-
-
-            gen = gen * s + m
+            # gen = gen * s + m
             x = x * s + m
-            samples.append(gen)
+            # samples.append(gen)
             ref.append(x)
 
-            visualize_pointcloud_batch(os.path.join(str(Path(opt.eval_path).parent), 'x.png'), gen[:64], None,
-                                       None, None)
+            for j in range(x.shape[0]):
+                # pc = gen[j,:,:]
+                pc = x[j,:,:]
 
-        samples = torch.cat(samples, dim=0)
+                class_name = classes[j]
+                outdir = os.path.join(opt.outdir,str(class_name))
+                if not os.path.exists(outdir):
+                    os.makedirs(outdir)
+                name = "sample_" + str(j) + '_original.ply'
+                outfile = os.path.join(outdir, name)
+
+                pcwrite(outfile, pc)
+
+                # save_pc2vtk_mesh(pc, outfile, color=res[class_name])
+
+            # ref = torch.cat(ref, dim=0)
+
+        # samples = torch.cat(samples, dim=0)
         ref = torch.cat(ref, dim=0)
 
-        torch.save(samples, opt.eval_path)
+        # torch.save(samples, opt.eval_path)
+
+        return ref
 
 
+def save_pc2vtk_mesh(pc,filename, color):
 
-    return ref
+    vtk_points = vtk.vtkPoints()
+    vtk_points.SetData(numpy_support.numpy_to_vtk(pc))
+
+    polydata = vtk.vtkPolyData() 
+    polydata.SetPoints(vtk_points)
+
+    # Generate delaunay triangulation
+    delaunay = vtkDelaunay3D()
+    delaunay.SetInputData(polydata)
+
+    ## a small alpha don't connect all of the points ~ 0.05
+    ## but a bigger alpha don't connect well the lower half of the condyle
+    # delaunay.SetAlpha(0.2)
+    delaunay.Update()
+
+    mesh = delaunay.GetOutput()
+
+    writer = vtk.vtkUnstructuredGridWriter()
+    writer.SetFileName(filename)
+    writer.SetInputData(mesh)
+    writer.Write()
 
 
 def main(opt):
@@ -498,7 +577,13 @@ def main(opt):
     outf_syn, = setup_output_subdirs(output_dir, 'syn')
 
     betas = get_betas(opt.schedule_type, opt.beta_start, opt.beta_end, opt.time_num)
-    model = Model(opt, betas, opt.loss_type, opt.model_mean_type, opt.model_var_type)
+
+    df_train = pd.read_csv(opt.train_csv)
+
+    unique_classes = np.sort(np.unique(df_train['class']))
+    unique_class_weights = np.array(class_weight.compute_class_weight(class_weight='balanced', classes=unique_classes, y=df_train['class']))    
+
+    model = Model(opt, betas, opt.loss_type, opt.model_mean_type, opt.model_var_type, unique_class_weights)
 
     if opt.cuda:
         model.cuda()
@@ -534,17 +619,21 @@ def parse_args():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataroot', default='ShapeNetCore.v2.PC15k/')
+    parser.add_argument('--train_csv', default='train.csv')
+    parser.add_argument('--test_csv', default='test.csv')
+    parser.add_argument('--outdir', default='./', help='output diretory to save generated samples')
+
     parser.add_argument('--category', default='chair')
 
-    parser.add_argument('--batch_size', type=int, default=50, help='input batch size')
-    parser.add_argument('--workers', type=int, default=16, help='workers')
-    parser.add_argument('--niter', type=int, default=10000, help='number of epochs to train for')
+    parser.add_argument('--batch_size', type=int, default=32, help='input batch size')
+    parser.add_argument('--workers', type=int, default=4, help='workers')
+    # parser.add_argument('--niter', type=int, default=10000, help='number of epochs to train for')
 
     parser.add_argument('--generate',default=True)
     parser.add_argument('--eval_gen', default=True)
 
     parser.add_argument('--nc', default=3)
-    parser.add_argument('--npoints', default=2048)
+    parser.add_argument('--npoints', default=2586)
     '''model'''
     parser.add_argument('--beta_start', default=0.0001)
     parser.add_argument('--beta_end', default=0.02)

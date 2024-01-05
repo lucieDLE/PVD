@@ -150,9 +150,10 @@ def lgan_mmd_cov(all_dist):
 def compute_all_metrics(sample_pcs, ref_pcs, batch_size):
     results = {}
 
-    M_rs_cd, M_rs_emd = _pairwise_EMD_CD_(ref_pcs, sample_pcs, batch_size)
+    # _rs_ as ref vs sample
+    M_rs_cd, M_rs_emd = _pairwise_EMD_CD_(ref_pcs, sample_pcs, batch_size) ## return CD et EMD
 
-    res_cd = lgan_mmd_cov(M_rs_cd.t())
+    res_cd = lgan_mmd_cov(M_rs_cd.t()) ## guessin res as residual
     results.update({
         "%s-CD" % k: v for k, v in res_cd.items()
     })
@@ -162,7 +163,7 @@ def compute_all_metrics(sample_pcs, ref_pcs, batch_size):
         "%s-EMD" % k: v for k, v in res_emd.items()
     })
 
-    M_rr_cd, M_rr_emd = _pairwise_EMD_CD_(ref_pcs, ref_pcs, batch_size)
+    M_rr_cd, M_rr_emd = _pairwise_EMD_CD_(ref_pcs, ref_pcs, batch_size) ## _rr_ as ref vs ref 
     M_ss_cd, M_ss_emd = _pairwise_EMD_CD_(sample_pcs, sample_pcs, batch_size)
 
     # 1-NN results

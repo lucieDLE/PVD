@@ -182,18 +182,20 @@ def visualize_pointcloud_batch(path, pointclouds, pred_labels, labels, categorie
     batch_size = len(pointclouds)
     fig = plt.figure(figsize=(20,20))
 
+    colors = ['tab:blue','tab:orange','tab:green','tab:red','tab:purple','tab:brown','tab:pink','tab:gray','tab:olive','tab:cyan']
     ncols = int(np.sqrt(batch_size))
     nrows = max(1, (batch_size-1) // ncols+1)
-    for idx, pc in enumerate(pointclouds):
-        if vis_label:
-            label = categories[labels[idx].item()]
-            pred = categories[pred_labels[idx]]
-            colour = 'g' if label == pred else 'r'
-        elif target is None:
 
-            colour = 'g'
+    for idx, pc in enumerate(pointclouds):
+        # if vis_label:
+        #     label = categories[labels[idx].item()]
+        #     pred = categories[pred_labels[idx]]
+        #     colour = 'g' if label == pred else 'r'
+        if labels is not None:
+            colour = colors[labels[idx]]
         else:
-            colour = target[idx]
+            colour = 'g'
+        
         pc = pc.cpu().numpy()
         ax = fig.add_subplot(nrows, ncols, idx + 1, projection='3d')
         ax.scatter(pc[:, 0], pc[:, 2], pc[:, 1], c=colour, s=5)
@@ -204,6 +206,9 @@ def visualize_pointcloud_batch(path, pointclouds, pred_labels, labels, categorie
 
     plt.savefig(path)
     plt.close(fig)
+    return fig
+
+
 
 
 '''
@@ -220,3 +225,4 @@ def plot_stats(output_dir, stats, interval):
 
     f.savefig(os.path.join(output_dir, 'stat.pdf'), bbox_inches='tight')
     plt.close(f)
+    return f 

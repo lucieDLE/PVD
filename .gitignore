@@ -6,5 +6,6 @@ __pycache__
 *.net
 *.npy
 *.npz
-eval_model
-eval_data
+output-1
+docker 
+

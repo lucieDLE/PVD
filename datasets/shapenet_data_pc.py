@@ -7,6 +7,7 @@ import random
 import open3d as o3d
 import numpy as np
 import torch.nn.functional as F
+import pandas as pd
 
 # taken from https://github.com/optas/latent_3d_points/blob/8e8f29f8124ed5fc59439e8551ba7ef7567c9a37/src/in_out.py
 synsetid_to_cate = {
@@ -34,7 +35,6 @@ synsetid_to_cate = {
 }
 cate_to_synsetid = {v: k for k, v in synsetid_to_cate.items()}
 
-
 class Uniform15KPC(Dataset):
     def __init__(self, root_dir, subdirs, tr_sample_size=10000,
                  te_sample_size=10000, split='train', scale=1.,
@@ -47,7 +47,7 @@ class Uniform15KPC(Dataset):
         self.split = split
         self.in_tr_sample_size = tr_sample_size
         self.in_te_sample_size = te_sample_size
-        self.subdirs = subdirs
+        self.subdirs = subdirs ## list of class idx/name
         self.scale = scale
         self.random_subsample = random_subsample
         self.input_dim = input_dim
@@ -231,8 +231,6 @@ class ShapeNet15kPointClouds(Uniform15KPC):
             random_subsample=random_subsample,
             all_points_mean=all_points_mean, all_points_std=all_points_std,
             input_dim=3, use_mask=use_mask)
-
-
 
 class PointCloudMasks(object):
     '''

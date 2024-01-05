@@ -1,11 +1,9 @@
 import torch
-# from backend import emd_cuda_dynamic as emd_cuda # jit compiling 
 from metrics.PyTorchEMD.backend import emd_cuda_dynamic as emd_cuda 
-from torch.cuda.amp import autocast, GradScaler, custom_fwd, custom_bwd 
+
 
 class EarthMoverDistanceFunction(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float32) 
     def forward(ctx, xyz1, xyz2):
         xyz1 = xyz1.contiguous()
         xyz2 = xyz2.contiguous()
@@ -16,7 +14,6 @@ class EarthMoverDistanceFunction(torch.autograd.Function):
         return cost
 
     @staticmethod
-    @custom_bwd
     def backward(ctx, grad_cost):
         xyz1, xyz2, match = ctx.saved_tensors
         grad_cost = grad_cost.contiguous()
@@ -44,9 +41,7 @@ def earth_mover_distance(xyz1, xyz2, transpose=True):
     if transpose:
         xyz1 = xyz1.transpose(1, 2)
         xyz2 = xyz2.transpose(1, 2)
-    # xyz1: B,N,3
-    N = xyz1.shape[1]
-    assert(xyz1.shape[-1] == 3), f'require it to be B,N,3; get: {xyz1.shape}'
-    cost = EarthMoverDistanceFunction.apply(xyz1, xyz2) / float(N)
+    cost = EarthMoverDistanceFunction.apply(xyz1, xyz2)
+    cost = cost / xyz1.shape[1]
     return cost
 
